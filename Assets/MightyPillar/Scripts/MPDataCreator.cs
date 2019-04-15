@@ -153,18 +153,12 @@ public class MPDataCreator : MonoBehaviour
 {
     public Bounds VolumnBound;
     public Vector2 PillarSize;
-    public int Subdivision { get; private set; } = 3;
-    public float SliceThickness { get; private set; } = 0.1f;
+    [HideInInspector]
+    public int Subdivision = 3;
+    [HideInInspector]
+    public float SliceThickness = 0.1f;
     public bool DrawGizmo = true;
     public string DataName = "";
-    public void SetSliceThickness(float t)
-    {
-        SliceThickness = t;
-    }
-    public void SetSubdivision(int t)
-    {
-        Subdivision = Mathf.Min(6, t);
-    }
     //intermediate data
     private CreateDataJob mCreateDataJob;
     public float EditorCreateDataProgress
@@ -191,6 +185,7 @@ public class MPDataCreator : MonoBehaviour
     }
     public void EditorCreateDataBegin()
     {
+        Subdivision = Mathf.Min(6, Subdivision);
         mCreateDataJob = new CreateDataJob(VolumnBound, Subdivision, PillarSize , SliceThickness);
     }
     public bool EditorCreateDataUpdate()

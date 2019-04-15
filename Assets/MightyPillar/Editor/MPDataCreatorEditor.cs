@@ -15,12 +15,12 @@ public class MPDataCreatorEditor : Editor
         int subdivision = EditorGUILayout.IntField("Subdivision(Up to 6)", comp.Subdivision);
         if (comp.Subdivision != subdivision)
         {
-            comp.SetSubdivision(subdivision);
+            comp.Subdivision = Mathf.Min(6, subdivision);
         }
         float thickness = EditorGUILayout.FloatField("Y Slice Thickness", comp.SliceThickness);
         if (comp.SliceThickness != thickness)
         {
-            comp.SetSliceThickness(thickness);
+            comp.SliceThickness = Mathf.Max(MightyPillar.SliceAccessor.minSliceThickness, thickness);
         }
         MPDataCreator dc = (MPDataCreator)target;
         if (GUILayout.Button("CreateData"))

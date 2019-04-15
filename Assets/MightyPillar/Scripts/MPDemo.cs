@@ -16,6 +16,10 @@ internal class debugPlane : IMPPoolItem
         mGo.transform.position = plane.center;
         mGo.transform.localScale = plane.size;
     }
+    public void DestorySelf()
+    {
+        MonoBehaviour.Destroy(mGo);
+    }
     void IMPPoolItem.Reset()
     {
         mGo.SetActive(false);
@@ -32,11 +36,20 @@ internal class debugPlanePool : MPDataPool<debugPlane>
         if (d == null)
         {
             GameObject go = MonoBehaviour.Instantiate(template) as GameObject;
+            go.hideFlags = HideFlags.HideInHierarchy;
             go.transform.rotation = Quaternion.Euler(90, 0, 0);
             d = new debugPlane(go);
         }
         d.Reset(plane);
         return d;
+    }
+    public static void Clear()
+    {
+        while(mqPool.Count > 0)
+        {
+            debugPlane plane = mqPool.Dequeue();
+            plane.DestorySelf();
+        }
     }
 }
 
@@ -68,6 +81,10 @@ public class MPDemo : MonoBehaviour
             mPillar.setting.boundHeight = BoundHeight;
             mPillar.setting.jumpableHeight = JumpableHeight;
         }
+    }
+    private void OnDestroy()
+    {
+        debugPlanePool.Clear();
     }
 
     // Update is called once per frame
@@ -123,6 +140,10 @@ public class MPDemo : MonoBehaviour
             if ((mMoveFlag & 0x08) > 0)
                 delta += Vector3.left;
             Camera.main.transform.position += delta;
+        }
+        if (Input.mouseScrollDelta.y != 0)
+        {
+            Camera.main.transform.position += Input.mouseScrollDelta.y * Camera.main.transform.forward;
         }
         UpdatePath();
         UpdateDynamicObstacle();
