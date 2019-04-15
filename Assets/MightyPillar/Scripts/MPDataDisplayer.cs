@@ -42,7 +42,7 @@ public class MPDataDisplayer : MonoBehaviour
         if (creator == null)
             return;
         string path = string.Format("{0}/MightyPillar/Resources/{1}.bytes", Application.dataPath, creator.DataName);
-        PillarRawData data = MPFileUtil.LoadData(path, creator.DataName);
+        PillarData data = MPFileUtil.LoadData(path, creator.DataName);
         //create display data
         mSlices.Clear();
         mCubes.Clear();
@@ -56,9 +56,7 @@ public class MPDataDisplayer : MonoBehaviour
         {
             for (int z = 0; z < data.setting.maxZ; ++z)
             {
-                Vector3 start = startPos + x * data.setting.sliceSize[0] * Vector3.right + 
-                    z * data.setting.sliceSize[1] * Vector3.forward;
-                QuadTreeAccessor.getDisplaySlice(data, start.x, start.z, x, z, lSlices);
+                data.GetDisplaySlice(startPos.x, startPos.z, x, z, lSlices);
             }
         }
         for (int s = 0; s < lSlices.Count; ++s)

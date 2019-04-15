@@ -55,226 +55,124 @@
             for (int i=0; i<Count; ++i)
             {
                 RawSlice slice = this[i];
-                slice.heightGrade = (ushort)Math.Floor((slice.height - startHeight)/ heightPerGrade);
+                slice.heightGrade = (ushort)Math.Ceiling((slice.height - startHeight)/ heightPerGrade);
                 uint hash = slice.heightGrade;
                 HashValue += (hash << 16) | slice.flag;
             }
         }
     }
-    public class PillarQuadTree
+    public class QuadTreeNodeSerializable : QuadTreeNode
     {
-        public PillarQuadTree[] Children { get; private set; }
-        public OrderedSlices Slices { get; private set; }
-        public bool IsLeaf
+        public QuadTreeNodeSerializable(FileStream stream)
         {
-            get
-            {
-                return Children == null;
-            }
+            //tree mask
+            byte[] bBuff = new byte[1];
+            stream.Read(bBuff, 0, 1);
+            Deserialize(bBuff[0], stream);
         }
-        public PillarQuadTree(int depth)
+        public QuadTreeNodeSerializable(int len) : base(len)
+        {}
+        public QuadTreeNodeSerializable(byte mask, FileStream stream)
         {
-            if (depth == 0)
-                return;
-            Children = new PillarQuadTree[4];
-            BuildTree(depth);
+            Deserialize(mask, stream);
         }
-        private void BuildTree(int depth)
+        protected override QuadTreeNode CreateSubTree(int sub) { return new QuadTreeNodeSerializable(sub); }
+        protected override QuadTreeLeaf CreateLeaf() { return new QuadTreeLeafSerializable(); }
+        private void Deserialize(byte mask, FileStream stream)
         {
+
             for (int i = 0; i < 4; ++i)
             {
-                Children[i] = new PillarQuadTree(depth - 1);
+                byte childMask = (byte)(1 << i);
+                if ((mask & childMask) > 0)
+                    Children[i] = new QuadTreeNodeSerializable(stream);
+                else
+                    Children[i] = new QuadTreeLeafSerializable(stream);
             }
         }
-        private bool IsEqual(PillarQuadTree other)
+        public void Serialize(FileStream stream)
         {
-            if (IsLeaf && other.IsLeaf)
+            byte[] bBuff = new byte[1] { GetChildMask() };
+            stream.Write(bBuff, 0, 1);
+            foreach(var child in Children)
             {
-                if (Slices.IsEqual(other.Slices))
-                    return true;
-            }
-            return false;
-        }
-        //x ~ (0, setting.maxX * power(2, subdivision)), x ~ (0, setting.maxZ * power(2, subdivision))
-        public void AddPillar(int subdivision, int x, int z, OrderedSlices slices)
-        {
-            //first grade
-            int u = x >> subdivision; // x / power(2, subdivision);
-            int v = z >> subdivision;
-            if (subdivision == 0)
-            {
-                Slices = slices;
-            }
-            else
-            {
-                int subx = x - u * (1 << subdivision);
-                int subz = z - v * (1 << subdivision);
-                --subdivision;
-                Children[(subx >> subdivision) * 2 + (subz >> subdivision)].AddPillar(subdivision, subx, subz, slices);
+                if (child is QuadTreeNodeSerializable)
+                    ((QuadTreeNodeSerializable)child).Serialize(stream);
+                else if (child is QuadTreeLeafSerializable)
+                    ((QuadTreeLeafSerializable)child).Serialize(stream);
             }
         }
-        public void UnifySlice(float startHeight, float heightPerGrade)
+    }
+    public class QuadTreeLeafSerializable : QuadTreeLeaf
+    {
+        public QuadTreeLeafSerializable(FileStream stream) : base()
         {
+            //slice count
+            byte[] bBuff = new byte[1];
+            byte[] uBuff = new byte[sizeof(uint)];
+            stream.Read(bBuff, 0, 1);
+            Reset(bBuff[0], 0);
+            for(int i=0; i< Slices.Length; ++i)
+            {
+                stream.Read(uBuff, 0, sizeof(uint));
+                Slices[i] = BitConverter.ToUInt32(uBuff, 0);
+                HashVal += Slices[i];
+            }
+        }
+        public QuadTreeLeafSerializable() : base()
+        {}
+        public void Serialize(FileStream stream)
+        {
+            byte[] bBuff = new byte[1] { 0 };
             if (Slices != null)
-            {
-                Slices.Unify(startHeight, heightPerGrade);
-            }
-            if (Children != null)
-            {
-                foreach (var child in Children)
-                    child.UnifySlice(startHeight, heightPerGrade);
-            }
-        }
-        public string GetDebugOutput()
-        {
-            if (IsLeaf)
-                return Slices.Count.ToString();
-            else
-            {
-                string s = "";
-                foreach (var child in Children)
-                    s += child.GetDebugOutput();
-                return s;
-            }
-        }
-        public void CombineTree()
-        {
-            if (IsLeaf)
+                bBuff[0] = (byte)Slices.Length;
+            stream.Write(bBuff, 0, 1);
+            if (Slices == null)
                 return;
-            bool isChildrenAllLeaf = true;
-            foreach (var child in Children)
+            foreach (var slice in Slices)
             {
-                if (!child.IsLeaf)
-                    child.CombineTree();
-                if (!child.IsLeaf)
-                    isChildrenAllLeaf = false;
-            }
-            if (!isChildrenAllLeaf)
-                return;
-            for (int i = 0; i < Children.Length - 1; ++i)
-            {
-                if (!Children[i].IsEqual(Children[i + 1]))
-                    return;
-            }
-            Slices = Children[0].Slices;
-            Children = null;
-        }
-        public uint GetChildMask()
-        {
-            uint mask = 0;
-            if (Children == null)
-                return mask;
-            if (!Children[0].IsLeaf) mask |= 1;
-            if (!Children[1].IsLeaf) mask |= 2;
-            if (!Children[2].IsLeaf) mask |= 4;
-            if (!Children[3].IsLeaf) mask |= 8;
-            return mask;
-        }
-        private void FillLeaf(List<uint> lTrees, List<uint> lSlices)
-        {
-            uint count = (uint)Math.Min(byte.MaxValue, Slices.Count);
-            if (((lSlices.Count + count) & 0xff000000) > 0)
-            {
-                MPLog.LogError("slice data overflow, buff len : " + lSlices.Count + ", current slice : " + count);
-                return;
-            }
-            uint val = count << 26 | ((uint)lSlices.Count & 0x03ffffff);
-            lTrees.Add(val);
-            for (int i = 0; i < Slices.Count; ++i)
-            {
-                uint rawSlice = Slices[i].heightGrade;
-                rawSlice <<= 16;
-                rawSlice = rawSlice | (uint)(Slices[i].flag & 0x0000ffff);
-                lSlices.Add(rawSlice);
-            }
-        }
-        public void GetData(List<uint> lTrees, List<uint> lSlices)
-        {
-            if (IsLeaf)
-            {
-                FillLeaf(lTrees, lSlices);
-            }
-            else
-            {
-                Queue<PillarQuadTree> qSubs = new Queue<PillarQuadTree>();
-                uint subOffset = (uint)(lTrees.Count + 1);
-                uint mask = GetChildMask();
-                uint val = subOffset << 4 | (mask & 0x0000000f);
-                lTrees.Add(val);
-                qSubs.Enqueue(this);
-                while(qSubs.Count > 0)
-                {
-                    PillarQuadTree sub = qSubs.Dequeue();
-                    foreach (var child in sub.Children)
-                    {
-                        if (child.IsLeaf)
-                            child.FillLeaf(lTrees, lSlices);
-                        else
-                        {
-                            qSubs.Enqueue(child);
-                            subOffset += 4;
-                            mask = child.GetChildMask();
-                            val = subOffset << 4 | (mask & 0x0000000f);
-                            lTrees.Add(val);
-                        }
-                    }
-                }
+                byte[] uBuff = BitConverter.GetBytes(slice);
+                stream.Write(uBuff, 0, uBuff.Length);
             }
         }
     }
     public static class MPFileUtil
     {
-        public static bool SaveData(string path, PillarSetting setting,  PillarQuadTree[] trees)
+        public static bool SaveData(string path, PillarSetting setting, QuadTreeBase[] trees)
         {
             if (File.Exists(path))
                 File.Delete(path);
             FileStream stream = File.Open(path, FileMode.Create);
             byte[] stbuff = setting.ToArray();
             stream.Write(stbuff, 0, stbuff.Length);
-            List<uint> lTrees = new List<uint>();
-            List<uint> lSlices = new List<uint>();
-            //header
+            //trees
+            byte[] bRootLeafBuff = new byte[1] { 1 << 4 };
             for (int x = 0; x < setting.maxX; ++x)
             {
                 for (int z = 0; z < setting.maxZ; ++z)
                 {
-                    PillarQuadTree tree = trees[x * setting.maxZ + z];
-                    uint uheader = (uint)(lTrees.Count) << 5;
-                    if (!tree.IsLeaf)
+                    QuadTreeBase subTree = trees[x * setting.maxZ + z];
+                    if (subTree is QuadTreeLeafSerializable)
                     {
-                        uint mask = tree.GetChildMask();
-                        mask |= 0x00000010;
-                        uheader |= mask & 0x0000001f;
+                        stream.Write(bRootLeafBuff, 0, 1);
+                        QuadTreeLeafSerializable leaf = (QuadTreeLeafSerializable)subTree;
+                        leaf.Serialize(stream);
                     }
-                    tree.GetData(lTrees, lSlices);
-                    byte[] buff = BitConverter.GetBytes(uheader);
-                    stream.Write(buff, 0, buff.Length);
+                    else
+                    {
+                        QuadTreeNodeSerializable node = (QuadTreeNodeSerializable)subTree;
+                        node.Serialize(stream);
+                    }
                 }
-            }
-            //quadtree
-            byte[] sizeBuff = BitConverter.GetBytes(lTrees.Count);
-            stream.Write(sizeBuff, 0, sizeBuff.Length);
-            foreach (var val in lTrees)
-            {
-                byte[] buff = BitConverter.GetBytes(val);
-                stream.Write(buff, 0, buff.Length);
-            }
-            //slices
-            sizeBuff = BitConverter.GetBytes(lSlices.Count);
-            stream.Write(sizeBuff, 0, sizeBuff.Length);
-            foreach (var val in lSlices)
-            {
-                byte[] buff = BitConverter.GetBytes(val);
-                stream.Write(buff, 0, buff.Length);
             }
             stream.Close();
             MPLog.Log("create data successed!");
             return true;
         }
-        public static PillarRawData LoadData(string path, string dataName)
+        public static PillarData LoadData(string path, string dataName)
         {
             FileStream stream = File.Open(path, FileMode.Open);
-            PillarRawData data = new PillarRawData();
+            PillarData data = new PillarData();
             data.DataName = dataName;
             int readOffset = 0;
             //read setting
@@ -298,39 +196,22 @@
                 MPLog.LogError("load header failed");
                 return null;
             }
-            data.header = new uint[headerSize];
-            byte[] uBuff = new byte[sizeof(uint)];
-            int readLen = 0;
-            while (readLen < headerSize)
+            data.tree = new QuadTreeBase[headerSize];
+            byte[] bBuff = new byte[1] { 0 };
+            byte bRootLeafBuff = 1 << 4;
+            for (int i=0; i<headerSize; ++i)
             {
-                int len = stream.Read(uBuff, 0, sizeof(uint));
-                uint val = BitConverter.ToUInt32(uBuff, 0);
-                data.header[readLen] = val;
-                ++readLen;
-            }
-            //read quad tree
-            stream.Read(uBuff, 0, sizeof(uint));
-            uint quadtreeSize = BitConverter.ToUInt32(uBuff, 0);
-            data.quadtree = new uint[quadtreeSize];
-            readLen = 0;
-            while (readLen < quadtreeSize)
-            {
-                int len = stream.Read(uBuff, 0, sizeof(uint));
-                uint val = BitConverter.ToUInt32(uBuff, 0);
-                data.quadtree[readLen] = val;
-                ++readLen;
-            }
-            //read slices
-            stream.Read(uBuff, 0, sizeof(uint));
-            uint heightSliceSize = BitConverter.ToUInt32(uBuff, 0);
-            data.slices = new uint[heightSliceSize];
-            readLen = 0;
-            while (readLen < heightSliceSize)
-            {
-                int len = stream.Read(uBuff, 0, sizeof(uint));
-                uint val = BitConverter.ToUInt32(uBuff, 0);
-                data.slices[readLen] = val;
-                ++readLen;
+                //root mask
+                stream.Read(bBuff, 0, 1);
+                //
+                if ((bBuff[0] & bRootLeafBuff) > 0)
+                {
+                    data.tree[i] = new QuadTreeLeafSerializable(stream);
+                }
+                else
+                {
+                    data.tree[i] = new QuadTreeNodeSerializable(bBuff[0], stream);
+                }
             }
             MPLog.Log("load successed !");
             stream.Close();

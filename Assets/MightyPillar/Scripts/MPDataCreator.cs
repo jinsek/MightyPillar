@@ -12,12 +12,12 @@ internal class CreateDataJob
     public int maxZ { get; private set; }
     public int subdivision { get; private set; }
     public float[] sliceSize { get; private set; }
-    public PillarQuadTree[] QuadTrees { get; private set; }
+    public QuadTreeBase[] QuadTrees { get; private set; }
     private Vector3 checkHalfExtent = Vector3.one;
     private RaycastHit[] hitResultBuff = new RaycastHit[128];
     private Vector3 vCheckTop = Vector3.one;
     private Vector3 vCheckDown = Vector3.zero;
-    private float mSliceThickness = SliceAccessor.minSliceThickness;
+    private float hegithPerGrade = SliceAccessor.minSliceThickness;
     private int curXIdx = 0;
     private int curZIdx = 0;
     public float[] heightValRange = new float[] { float.MaxValue, float.MinValue};
@@ -38,19 +38,14 @@ internal class CreateDataJob
             return (float)(curXIdx + curZIdx * maxX) / (float)(maxX * maxZ);
         }
     }
-    private void UpdateHeightRange(float height)
-    {
-        if (height > heightValRange[1])
-            heightValRange[1] = height;
-        if (height < heightValRange[0])
-            heightValRange[0] = height;
-    }
     public CreateDataJob(Bounds VolumnBound, int sub, Vector2 PillarSize, float thickness)
     {
         maxX = Mathf.CeilToInt(VolumnBound.size.x / PillarSize.x);
         maxZ = Mathf.CeilToInt(VolumnBound.size.z / PillarSize.y);
         subdivision = sub;
         center = new float[] { VolumnBound.center.x, VolumnBound.center.y, VolumnBound.center.z };
+        heightValRange = new float[] { VolumnBound.center.y - 0.5f * VolumnBound.size.y,
+            VolumnBound.center.y + 0.5f * VolumnBound.size.y};
         sliceSize = new float[] { PillarSize.x, PillarSize.y };
         vCheckTop = new Vector3(VolumnBound.center.x - VolumnBound.size.x / 2,
              VolumnBound.center.y + VolumnBound.size.y / 2 + 10f * thickness,
@@ -59,8 +54,10 @@ internal class CreateDataJob
              VolumnBound.center.y - VolumnBound.size.y / 2 - 10f * thickness,
             VolumnBound.center.z - VolumnBound.size.z / 2);
         checkHalfExtent = new Vector3(sliceSize[0] / 2, thickness, sliceSize[1] / 2);
-        mSliceThickness = Mathf.Max(SliceAccessor.minSliceThickness, thickness);
-        QuadTrees = new PillarQuadTree[maxX * maxZ];
+        int sliceCount = Mathf.CeilToInt((heightValRange[1] - heightValRange[0]) / thickness);
+        sliceCount = Mathf.Min(sliceCount, ushort.MaxValue);
+        hegithPerGrade = (heightValRange[1] - heightValRange[0]) / sliceCount;
+        QuadTrees = new QuadTreeBase[maxX * maxZ];
         //
         infinitRoof.flag = 0;
         infinitRoof.height = float.MaxValue;
@@ -68,7 +65,7 @@ internal class CreateDataJob
         checkHalfExtent = 1f / detailedSize * checkHalfExtent;
         //
     }
-    private void ScanTree(PillarQuadTree tree)
+    private void ScanTree(QuadTreeNodeSerializable tree)
     {
         float rayLen = vCheckTop.y - vCheckDown.y;
         int detailedX = curXIdx * detailedSize;
@@ -84,7 +81,7 @@ internal class CreateDataJob
                 Vector3 top = vCheckTop + fx * Vector3.right + fz * Vector3.forward;
                 int len = Physics.BoxCastNonAlloc(top, checkHalfExtent, Vector3.down, hitResultBuff, Quaternion.identity, 1.1f * rayLen);
                 //floor
-                for (int h = 0; h < len; ++h)
+                for (int h = 0; h < len && h < SliceAccessor.MaxHeightSliceCount / 2; ++h)
                 {
                     RaycastHit hit = hitResultBuff[h];
                     if (Vector3.Dot(hit.normal, Vector3.up) < 0)
@@ -94,7 +91,6 @@ internal class CreateDataJob
                     rs.flag = 0;
                     rs.heightGrade = ushort.MaxValue;
                     slices.Add(rs);
-                    UpdateHeightRange(rs.height);
                     //Debug.Log(string.Format("u : {0}, v : {1}, height : {2}, flag : {3}", curXIdx, curZIdx, rs.height, rs.flag));
                 }
                 slices.SortSlices();
@@ -104,10 +100,10 @@ internal class CreateDataJob
                 }
                 //ceiling
                 Vector3 down = vCheckTop;
-                down.y = slices[0].height + 10f * mSliceThickness;
+                down.y = slices[0].height + 2f * hegithPerGrade;
                 down += fx * Vector3.right + fz * Vector3.forward;
                 len = Physics.BoxCastNonAlloc(down, checkHalfExtent, Vector3.up, hitResultBuff, Quaternion.identity, 1.1f * rayLen);
-                for (int h = 0; h < len; ++h)
+                for (int h = 0; h < len && h < SliceAccessor.MaxHeightSliceCount / 2; ++h)
                 {
                     RaycastHit hit = hitResultBuff[h];
                     if (Vector3.Dot(hit.normal, Vector3.down) < 0)
@@ -116,9 +112,9 @@ internal class CreateDataJob
                     rs.height = hit.point.y;
                     rs.flag = 1;
                     slices.Add(rs);
-                    UpdateHeightRange(rs.height);
                     //Debug.Log(string.Format("u : {0}, v : {1}, height : {2}, flag : {3}", curXIdx, curZIdx, rs.height, rs.flag));
                 }
+                slices.Unify(heightValRange[0], hegithPerGrade);
                 tree.AddPillar(subdivision, detailedX + u, detailedZ + v, slices);
             }
         }
@@ -128,8 +124,8 @@ internal class CreateDataJob
         if (IsDone)
             return;
         if (QuadTrees[curXIdx * maxZ + curZIdx] == null)
-            QuadTrees[curXIdx * maxZ + curZIdx] = new PillarQuadTree(subdivision);
-        ScanTree(QuadTrees[curXIdx * maxZ + curZIdx]);
+            QuadTrees[curXIdx * maxZ + curZIdx] = new QuadTreeNodeSerializable(subdivision);
+        ScanTree((QuadTreeNodeSerializable)QuadTrees[curXIdx * maxZ + curZIdx]);
         //update idx
         ++curXIdx;
         if (curXIdx >= maxX)
@@ -142,9 +138,7 @@ internal class CreateDataJob
     public PillarSetting CreateSetting()
     {
         PillarSetting setting = new PillarSetting();
-        int sliceCount = Mathf.CeilToInt((heightValRange[1] - heightValRange[0]) / mSliceThickness);
-        sliceCount = Mathf.Min(sliceCount, ushort.MaxValue);
-        setting.hegithPerGrade = (heightValRange[1] - heightValRange[0])/ sliceCount;
+        setting.hegithPerGrade = hegithPerGrade;
         setting.heightValRange = heightValRange;
         setting.maxX = maxX;
         setting.maxZ = maxZ;
@@ -214,11 +208,17 @@ public class MPDataCreator : MonoBehaviour
         //finaliz the tree data
         for (int i = 0; i < mCreateDataJob.QuadTrees.Length; ++i)
         {
-            mCreateDataJob.QuadTrees[i].UnifySlice(setting.heightValRange[0], setting.hegithPerGrade);
-        }
-        for (int i = 0; i < mCreateDataJob.QuadTrees.Length; ++i)
-        {
-            mCreateDataJob.QuadTrees[i].CombineTree();
+            QuadTreeNodeSerializable node = (QuadTreeNodeSerializable)mCreateDataJob.QuadTrees[i];
+            node.CombineTree();
+            if (node.IsCombinableLeaf)
+            {
+                mCreateDataJob.QuadTrees[i] = (QuadTreeLeafSerializable)node.Children[0];
+                for (int cid = 1; cid < 4; ++cid)
+                {
+                    QuadTreeLeaf leaf = (QuadTreeLeaf)node.Children[cid];
+                    HeightSlicePool.Push(leaf.Header, leaf.Slices);
+                }
+            }
         }
         //
         string path = string.Format("{0}/MightyPillar/Resources/{1}.bytes", Application.dataPath, DataName);

@@ -122,7 +122,7 @@
         public bool Contains(uint uid)
         {
             for (int i = 0; i < Length; ++i)
-                if (Data[i].UID == uid)
+                if (Data[i].SliceHeader == uid)
                     return true;
             return false;
         }
@@ -135,7 +135,7 @@
         public static Queue<MPPathNode> debugnodes = new Queue<MPPathNode>();
         public static bool isDebug = false;
         public static Queue<MPPathNode> pathResult = new Queue<MPPathNode>();
-        public static bool FindPath(PillarRawData data, MPPathNode srcNode, MPPathNode destNode)
+        public static bool FindPath(PillarData data, MPPathNode srcNode, MPPathNode destNode)
         {
             //temp data struct
             Dictionary<uint, uint> camefrom = new Dictionary<uint, uint>();
@@ -144,7 +144,7 @@
             int detail = 1 << data.setting.subdivision;
             int maxDeatailX = data.setting.maxX * detail;
             int maxDeatailZ = data.setting.maxZ * detail;
-            _neighbours.Reallocate((detail + 1) * 4 * 64); //each pillar height slice max to 64
+            _neighbours.Reallocate((detail + 1) * 4 * SliceAccessor.MaxHeightSliceCount); //each pillar height slice max to 64
             //has to create a copy, for mem pool clean
             MPPathNode start = MPPathNodePool.Pop(srcNode);
             frontier.Enqeue(start);
@@ -158,7 +158,7 @@
                 if (current.UID == destNode.UID)
                     break;
                 _neighbours.Reset();
-                PillarAccessor.getPathNeighbours(data, current, maxDeatailX, maxDeatailZ, _neighbours);
+                data.GetPathNeighbours(current, maxDeatailX, maxDeatailZ, _neighbours);
                 for(int i=0; i< _neighbours.Length; ++i)
                 {
                     MPPathNode n = _neighbours.Data[i];
