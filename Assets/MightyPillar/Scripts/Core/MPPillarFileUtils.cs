@@ -13,7 +13,7 @@
                 return -1;
             return 1;
         }
-        public uint HashValue = 0;
+        public ulong HashValue = 0;
         public void SortSlices()
         {
             Sort(CompareSlice);
@@ -56,8 +56,7 @@
             {
                 RawSlice slice = this[i];
                 slice.heightGrade = (ushort)Math.Ceiling((slice.height - startHeight)/ heightPerGrade);
-                uint hash = slice.heightGrade;
-                HashValue += (hash << 16) | slice.flag;
+                HashValue += SliceAccessor.packVal(slice.heightGrade, 0, 0, slice.flag);
             }
         }
     }
@@ -109,13 +108,13 @@
         {
             //slice count
             byte[] bBuff = new byte[1];
-            byte[] uBuff = new byte[sizeof(uint)];
+            byte[] uBuff = new byte[sizeof(ulong)];
             stream.Read(bBuff, 0, 1);
             Reset(bBuff[0], 0);
             for(int i=0; i< Slices.Length; ++i)
             {
-                stream.Read(uBuff, 0, sizeof(uint));
-                Slices[i] = BitConverter.ToUInt32(uBuff, 0);
+                stream.Read(uBuff, 0, sizeof(ulong));
+                Slices[i] = BitConverter.ToUInt64(uBuff, 0);
                 HashVal += Slices[i];
             }
         }

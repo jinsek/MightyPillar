@@ -16,10 +16,11 @@ namespace MightyPillar
         public int maxX;
         public int maxZ;
         public int subdivision;
+        public float slopeErr;
         //volumn center
         public float[] center;
         //total height grades
-        public float hegithPerGrade;
+        public float heightPerGrade;
         //each slice's size, x & z
         public float[] sliceSize;
         //min/max height value
@@ -33,7 +34,7 @@ namespace MightyPillar
         //-----------------------------
         public int byteSize()
         {
-            return sizeof(int) * 3 + sizeof(float) * 8;
+            return sizeof(int) * 3 + sizeof(float) * 9;
         }
         private void AssginBytes(byte[] src, byte[] dst, ref int startIdx)
         {
@@ -48,10 +49,11 @@ namespace MightyPillar
             AssginBytes(BitConverter.GetBytes(maxX), arr, ref offset);
             AssginBytes(BitConverter.GetBytes(maxZ), arr, ref offset);
             AssginBytes(BitConverter.GetBytes(subdivision), arr, ref offset);
+            AssginBytes(BitConverter.GetBytes(slopeErr), arr, ref offset);
             AssginBytes(BitConverter.GetBytes(center[0]), arr, ref offset);
             AssginBytes(BitConverter.GetBytes(center[1]), arr, ref offset);
             AssginBytes(BitConverter.GetBytes(center[2]), arr, ref offset);
-            AssginBytes(BitConverter.GetBytes(hegithPerGrade), arr, ref offset);
+            AssginBytes(BitConverter.GetBytes(heightPerGrade), arr, ref offset);
             AssginBytes(BitConverter.GetBytes(sliceSize[0]), arr, ref offset);
             AssginBytes(BitConverter.GetBytes(sliceSize[1]), arr, ref offset);
             AssginBytes(BitConverter.GetBytes(heightValRange[0]), arr, ref offset);
@@ -69,6 +71,8 @@ namespace MightyPillar
             offset += sizeof(int);
             subdivision = BitConverter.ToInt32(data, offset);
             offset += sizeof(int);
+            slopeErr = BitConverter.ToSingle(data, offset);
+            offset += sizeof(float);
             center = new float[3];
             center[0] = BitConverter.ToSingle(data, offset);
             offset += sizeof(float);
@@ -76,7 +80,7 @@ namespace MightyPillar
             offset += sizeof(float);
             center[2] = BitConverter.ToSingle(data, offset);
             offset += sizeof(float);
-            hegithPerGrade = BitConverter.ToSingle(data, offset);
+            heightPerGrade = BitConverter.ToSingle(data, offset);
             offset += sizeof(float);
             sliceSize = new float[2];
             sliceSize[0] = BitConverter.ToSingle(data, offset);
@@ -94,31 +98,52 @@ namespace MightyPillar
     {
         public const float minSliceThickness = 0.001f;
         public const int MaxHeightSliceCount = 64;
+        public const float maxSlopeError = 10; //around 5.71 degree
+        public const float slopeMagnify = 1000f;
         public const ushort SliceCeiling = 1;
-        public static ushort heightGrade(uint val)
+        public static ushort heightGrade(ulong val)
         {
-            return (ushort)(val >> 16);
+            return (ushort)(val >> 48);
         }
-        public static ushort flag(uint val)
+        public static short slopeUGrade(ulong val)
         {
-            return (ushort)(val & 0x0000ffff);
+            return (short)((val & 0x0000ffff00000000) >> 32);
         }
-        public static float heightVal(float minHeight, float hegithPerGrade, uint val)
+        public static short slopeVGrade(ulong val)
         {
-            ushort grade = (ushort)(val >> 8);
-            return minHeight + grade * hegithPerGrade;
+            return (short)((val & 0x00000000ffff0000) >> 16);
+        }
+        public static byte flag(ulong val)
+        {
+            return (byte)(val & 0x00000000000000ff);
+        }
+        public static ulong packVal(ushort h, short su, short sv, byte f)
+        {
+            ulong val = h;
+            val <<= 48;
+            ulong temp = (ulong)(su & 0x000000000000ffff);
+            val |= temp << 32;
+            temp = (ulong)(sv & 0x000000000000ffff);
+            val |= temp << 16;
+            val |= f;
+            return val;
+        }
+        public static float heightVal(float minHeight, float heightPerGrade, ulong val)
+        {
+            ushort grade = (ushort)(val >> 48);
+            return minHeight + grade * heightPerGrade;
         }
         public static float heightVal(PillarSetting setting, uint val)
         {
-            ushort grade = (ushort)(val >> 8);
-            return setting.heightValRange[0] + grade * setting.hegithPerGrade;
+            ushort grade = (ushort)(val >> 48);
+            return setting.heightValRange[0] + grade * setting.heightPerGrade;
         }
     }
     //data structures for data creating
     public class RawSlice
     {
         public float height = 0;
-        public ushort flag = 0;
+        public byte flag = 0;
         public ushort heightGrade = 0;
     }
     //data structure for data display
@@ -127,41 +152,40 @@ namespace MightyPillar
         public float height;
         public float[] min;
         public float[] max;
-        public ushort flag;
+        public byte flag;
     }
     //data container
     internal class HeightSlicePool
     {
-        private static Dictionary<int, Queue<uint[]>> mPools = new Dictionary<int, Queue<uint[]>>();
-        private static Dictionary<uint,uint[]> mSlices = new Dictionary<uint, uint[]>();
-        public static uint[] GetSlices(uint header)
+        private static Dictionary<int, Queue<ulong[]>> mPools = new Dictionary<int, Queue<ulong[]>>();
+        private static Dictionary<uint, ulong[]> mSlices = new Dictionary<uint, ulong[]>();
+        public static ulong[] GetSlices(uint header)
         {
             if (mSlices.ContainsKey(header))
                 return mSlices[header];
             return null;
         }
-        public static uint[] Pop(uint header, int len)
+        public static ulong[] Pop(uint header, int len)
         {
-            uint[] item = null;
+            ulong[] item = null;
             if (mPools.ContainsKey(len) && mPools[len].Count > 0)
                 item = mPools[len].Dequeue();
             if (item == null)
-                item = new uint[len];
+                item = new ulong[len];
             mSlices.Add(header, item);
             return item;
         }
-        public static void Push(uint header, uint[] slices)
+        public static void Push(uint header, ulong[] slices)
         {
             if (slices.Length == 0)
                 return;
             if (!mPools.ContainsKey(slices.Length))
-                mPools.Add(slices.Length, new Queue<uint[]>());
+                mPools.Add(slices.Length, new Queue<ulong[]>());
             mPools[slices.Length].Enqueue(slices);
             if (mSlices.ContainsKey(header))
                 mSlices.Remove(header);
         }
     }
-    //internal class QuadTreeNodePool : MPDataPool<QuadTreeNode> { }
     public abstract class QuadTreeBase
     {
         public abstract string DebugOutput { get; }
@@ -177,8 +201,8 @@ namespace MightyPillar
                 return Slices.Length.ToString();
             }
         }
-        public uint[] Slices { get; private set; }
-        public uint HashVal { get; protected set; }
+        public ulong[] Slices { get; private set; }
+        public ulong HashVal { get; protected set; }
         public uint Header { get; private set; }
         public QuadTreeLeaf()
         {
@@ -186,14 +210,22 @@ namespace MightyPillar
             Slices = null;
             HashVal = 0;
         }
-        public void Reset(int len, uint hash)
+        public void Reset(int len, ulong hash)
         {
+            Header = _uid_seed;
             if (_uid_seed + len >= uint.MaxValue)
                 _uid_seed = 0;
             _uid_seed += (uint)len;
-            Header = _uid_seed;
             Slices = HeightSlicePool.Pop(Header, len);
             HashVal = hash;
+        }
+        public void RefreshHash()
+        {
+            HashVal = 0;
+            if (Slices == null)
+                return;
+            for (int i = 0; i < Slices.Length; ++i)
+                HashVal += Slices[i];
         }
         public override bool IsEqual(QuadTreeBase other)
         {
@@ -205,6 +237,13 @@ namespace MightyPillar
             }
             return false;
         }
+        public bool IsCombinable(QuadTreeLeaf other)
+        {
+            if (other != null && Slices != null && other.Slices != null &&
+                Slices.Length == other.Slices.Length)
+                return true;
+            return false;
+        }
     }
     public class QuadTreeNode : QuadTreeBase
     {
@@ -213,27 +252,27 @@ namespace MightyPillar
             get
             {
                 string s = "";
-                foreach (var child in Children)
-                    s += child.DebugOutput;
+                for (int i=0; i<4; ++i)
+                    s += Children[i].DebugOutput;
                 return s;
-            }
-        }
-        public bool IsCombinableLeaf
-        {
-            get
-            {
-                for (int i = 0; i < Children.Length - 1; ++i)
-                {
-                    if (!Children[i].IsEqual(Children[i + 1]))
-                        return false;
-                }
-                return true;
             }
         }
         public QuadTreeBase[] Children = new QuadTreeBase[4];
         public override bool IsEqual(QuadTreeBase other)
         {
             return false;
+        }
+        private bool isFullLeaf
+        {
+            get
+            {
+                for (int i = 0; i < Children.Length; ++i)
+                {
+                    if (Children[i] == null || !(Children[i] is QuadTreeLeaf))
+                        return false;
+                }
+                return true;
+            }
         }
         protected QuadTreeNode() { }
         //build a full tree
@@ -282,17 +321,83 @@ namespace MightyPillar
                 leaf.Reset(rawSlices.Count, rawSlices.HashValue);
                 for (int i = 0; i < rawSlices.Count; ++i)
                 {
-                    uint rawSlice = rawSlices[i].heightGrade;
-                    rawSlice <<= 16;
-                    rawSlice = rawSlice | (uint)(rawSlices[i].flag & 0x0000ffff);
-                    leaf.Slices[i] = rawSlice;
+                    leaf.Slices[i] = SliceAccessor.packVal(rawSlices[i].heightGrade, 0, 0, rawSlices[i].flag);
                 }
             }
         }
         private void SubdividLeaf(int idx)
         {
             QuadTreeLeaf leaf = (QuadTreeLeaf)Children[idx];
-            QuadTreeNode node = CreateSubTree(0);
+            Children[idx] = SubdivideLeaf(leaf);
+        }
+        private short GetSlope(ulong start, ulong end, float delta, float sliceThickness)
+        {
+            uint startH = SliceAccessor.heightGrade(start);
+            uint endH = SliceAccessor.heightGrade(end);
+            return (short)(SliceAccessor.slopeMagnify * sliceThickness * (endH - startH) / delta);
+        }
+        private QuadTreeLeaf Combine(float dx, float dz, float sliceThickness, float slopeErr)
+        {
+            if (Children[0] == null || !(Children[0] is QuadTreeLeaf))
+                return null;
+            QuadTreeLeaf leaf = (QuadTreeLeaf)Children[0];
+            for (int i = 1; i < Children.Length; ++i)
+            {
+                if (Children[i] == null || !(Children[i] is QuadTreeLeaf))
+                    return null;
+                if (!leaf.IsCombinable((QuadTreeLeaf)Children[i]))
+                    return null;
+            }
+            for (int s = 0; s < leaf.Slices.Length; ++s)
+            {
+                ulong leafS = leaf.Slices[s];
+                byte flag = SliceAccessor.flag(leafS);
+                //x axis
+                short slopeU = GetSlope(leafS, ((QuadTreeLeaf)Children[1]).Slices[s], dx, sliceThickness);
+                short slopeU1 = GetSlope(((QuadTreeLeaf)Children[2]).Slices[s], ((QuadTreeLeaf)Children[3]).Slices[s],
+                    dx, sliceThickness);
+                if ((slopeU != 0 && slopeU1 != 0 && Math.Abs(slopeU1 - slopeU) > slopeErr * SliceAccessor.slopeMagnify))
+                    return null;
+                slopeU += slopeU1; slopeU /= 2;
+                //z axis
+                short slopeV = GetSlope(leafS, ((QuadTreeLeaf)Children[2]).Slices[s], dz, sliceThickness);
+                short slopeV1 = GetSlope(((QuadTreeLeaf)Children[1]).Slices[s], ((QuadTreeLeaf)Children[3]).Slices[s],
+                    dz, sliceThickness);
+                if ((slopeV != 0 && slopeV1 != 0 && Math.Abs(slopeV1 - slopeV) > slopeErr * SliceAccessor.slopeMagnify))
+                    return null;
+                slopeV += slopeV1; slopeV /= 2;
+                ushort updateH = 0;
+                for (int i = 0; i < Children.Length; ++i)
+                {
+                    QuadTreeLeaf l = (QuadTreeLeaf)Children[i];
+                    ulong lS = l.Slices[s];
+                    if (leaf.HashVal != l.HashVal)
+                    {
+                        byte f = SliceAccessor.flag(lS);
+                        short sU = SliceAccessor.slopeUGrade(lS);
+                        short sV = SliceAccessor.slopeVGrade(lS);
+                        //floor cant match ceiling
+                        if (flag != f)
+                            return null;
+                        //slope error
+                        if ((sU != 0 && Math.Abs(sU - slopeU) > slopeErr * SliceAccessor.slopeMagnify) || 
+                            (sV != 0 && Math.Abs(sV - slopeV) > slopeErr * SliceAccessor.slopeMagnify))
+                            return null;
+                    }
+                    updateH += SliceAccessor.heightGrade(lS);
+                }
+                updateH >>= 2;//average height
+                leaf.Slices[s] = SliceAccessor.packVal(updateH, slopeU, slopeV, flag);
+            }
+            leaf.RefreshHash();
+            return leaf;
+        }
+        //note : this function can't be used to subdivide inherented node
+        public static QuadTreeNode SubdivideLeaf(QuadTreeLeaf leaf)
+        {
+            if (leaf == null)
+                return null;
+            QuadTreeNode node = new QuadTreeNode(0);
             for (int i = 0; i < 4; ++i)
             {
                 QuadTreeLeaf childLeaf = (QuadTreeLeaf)node.Children[i];
@@ -300,27 +405,27 @@ namespace MightyPillar
                 Array.Copy(leaf.Slices, childLeaf.Slices, leaf.Slices.Length);
             }
             HeightSlicePool.Push(leaf.Header, leaf.Slices);
-            Children[idx] = node;
+            return node;
         }
-        public void CombineTree()
+        public static QuadTreeLeaf CombineTree(QuadTreeNode node, float dx, float dz, float sliceThickness, float slopeErr)
         {
-            for (int i=0; i<4; ++i)
+            if (node == null)
+                return null;
+            for (int i = 0; i < 4; ++i)
             {
-                if (Children[i] is QuadTreeNode)
+                if (node.Children[i] is QuadTreeNode)
                 {
-                    QuadTreeNode node = (QuadTreeNode)Children[i];
-                    node.CombineTree();
-                    if (node.IsCombinableLeaf)
-                    {
-                        Children[i] = (QuadTreeLeaf)node.Children[0];
-                        for (int cid = 1; cid < 4; ++cid)
-                        {
-                            QuadTreeLeaf leaf = (QuadTreeLeaf)node.Children[cid];
-                            HeightSlicePool.Push(leaf.Header, leaf.Slices);
-                        }
-                    }
+                    QuadTreeNode subNode = (QuadTreeNode)node.Children[i];
+                    QuadTreeLeaf replacedLeaf = CombineTree(subNode, 0.5f * dx, 0.5f * dz, sliceThickness, slopeErr);
+                    if (replacedLeaf != null)
+                        node.Children[i] = replacedLeaf;
                 }
             }
+            if (node.isFullLeaf)
+            {
+                return node.Combine(dx, dz, sliceThickness, slopeErr);
+            }
+            return null;
         }
         public byte GetChildMask()
         {
@@ -333,20 +438,21 @@ namespace MightyPillar
             if (!(Children[3] is QuadTreeLeaf)) mask |= 8;
             return mask;
         }
-        public QuadTreeLeaf GetLeaf(int x, int z, float sizex, float sizez,  float[] center, ref int subdivision)
+        public QuadTreeLeaf GetLeaf(int x, int z, float sizex, float sizez, ref float centerx, ref float centerz, 
+            ref int subdivision)
         {
             int u = x >> subdivision; // x / power(2, subdivision);
             int v = z >> subdivision;
             //center pos
-            center[0] += sizex * u;
-            center[1] += sizez * v;
+            centerx += sizex * u;
+            centerz += sizez * v;
             //
             int idx = u * 2 + v;
             QuadTreeBase subtree = Children[idx];
             if (subtree is QuadTreeLeaf)
             {
-                center[0] += sizex * 0.5f;
-                center[1] += sizex * 0.5f;
+                centerx += sizex * 0.5f;
+                centerz += sizex * 0.5f;
                 return (QuadTreeLeaf)subtree;
             }
             else
@@ -356,7 +462,7 @@ namespace MightyPillar
                 int subz = z - v * detail;
                 subdivision -= 1;
                 QuadTreeNode node = (QuadTreeNode)subtree;
-                return node.GetLeaf(subx, subz, sizex * 0.5f, sizez * 0.5f, center, ref subdivision);
+                return node.GetLeaf(subx, subz, sizex * 0.5f, sizez * 0.5f, ref centerx, ref centerz, ref subdivision);
             }
         }
     }
@@ -366,7 +472,7 @@ namespace MightyPillar
         public PillarSetting setting = new PillarSetting();
         public QuadTreeBase[] tree;
         //x ~ (0, setting.maxX * power(2, subdivision)), z ~ (0, setting.maxZ * power(2, subdivision))
-        public QuadTreeLeaf GetLeaf(int x, int z, float[] center, ref int subdivision)
+        public QuadTreeLeaf GetLeaf(int x, int z, ref float centerx, ref float centerz, ref int subdivision)
         {
             int u = x >> subdivision; // x / power(2, subdivision);
             int v = z >> subdivision;
@@ -375,13 +481,13 @@ namespace MightyPillar
                 return null;
             QuadTreeBase subtree = tree[idx];
             //center pos
-            center[0] = setting.sliceSize[0] * u;
-            center[1] = setting.sliceSize[1] * v;
+            centerx = setting.sliceSize[0] * u;
+            centerz = setting.sliceSize[1] * v;
             //
             if (subtree is QuadTreeLeaf)
             {
-                center[0] += setting.sliceSize[0] * 0.5f;
-                center[1] += setting.sliceSize[1] * 0.5f;
+                centerx += setting.sliceSize[0] * 0.5f;
+                centerz += setting.sliceSize[1] * 0.5f;
                 return (QuadTreeLeaf)subtree;
             }
             else
@@ -391,24 +497,25 @@ namespace MightyPillar
                 int subz = z - v * detail;
                 subdivision -= 1;
                 QuadTreeNode node = (QuadTreeNode)subtree;
-                return node.GetLeaf(subx, subz, setting.sliceSize[0] * 0.5f, setting.sliceSize[1] * 0.5f, center,
-                    ref subdivision);
+                return node.GetLeaf(subx, subz, setting.sliceSize[0] * 0.5f, setting.sliceSize[1] * 0.5f, 
+                    ref centerx, ref centerz, ref subdivision);
             }
         }
         //x ~ (0, setting.maxX * power(2, subdivision)), z ~ (0, setting.maxZ * power(2, subdivision))
         public MPPathNode GetStandablePathNode(int u, int v, ushort refH)
         {
-            float[] center = new float[2] { 0, 0 };
+            float centerx = 0;
+            float centerz = 0;
             int subdivision = setting.subdivision;
-            QuadTreeLeaf leaf = GetLeaf(u, v, center, ref subdivision);
+            QuadTreeLeaf leaf = GetLeaf(u, v, ref centerx, ref centerz, ref subdivision);
             if (leaf == null || leaf.Slices == null)
                 return null;
             for (uint i = (uint)leaf.Slices.Length - 1; i > 0; --i)
             {
-                uint currentSlice = leaf.Slices[i];
-                ushort currentf = SliceAccessor.flag(currentSlice);
+                ulong currentSlice = leaf.Slices[i];
+                byte currentf = SliceAccessor.flag(currentSlice);
                 ushort currentheight = SliceAccessor.heightGrade(currentSlice);
-                uint lowerSlice = leaf.Slices[i - 1];
+                ulong lowerSlice = leaf.Slices[i - 1];
                 ushort lowerf = SliceAccessor.flag(lowerSlice);
                 ushort lowerheight = SliceAccessor.heightGrade(lowerSlice);
                 if ((currentf & SliceAccessor.SliceCeiling) > 0)
@@ -416,21 +523,19 @@ namespace MightyPillar
                 if (refH >= currentheight ||
                     ((lowerf & SliceAccessor.SliceCeiling) > 0 && refH >= lowerheight))
                 {//pillar roof
-                    return MPPathNodePool.Pop(leaf.Header, u, v, i, subdivision, setting.subdivision, center, 
-                        currentheight, currentf);
+                    return MPPathNodePool.Pop(leaf.Header, u, v, i, subdivision, setting.subdivision, 
+                        centerx, centerz, currentSlice);
                 }
             }
-            uint floorSlice = leaf.Slices[0];
-            ushort floorf = SliceAccessor.flag(floorSlice);
-            ushort floorheight = SliceAccessor.heightGrade(floorSlice);
-            return MPPathNodePool.Pop(leaf.Header, u, v, 0, subdivision, setting.subdivision,
-                center, floorheight, floorf);
+            ulong floorSlice = leaf.Slices[0];
+            return MPPathNodePool.Pop(leaf.Header, u, v, 0, subdivision, setting.subdivision, 
+                centerx, centerz, floorSlice);
         }
         protected virtual bool CanMove2Neighbour(PillarSetting setting, ushort curH, ushort curMaxH,
             ushort neighbourH, ushort neighbourMaxH)
         {
             //jumpable
-            if (Math.Abs(curH - neighbourH) * setting.hegithPerGrade > setting.jumpableHeight)
+            if (Math.Abs(curH - neighbourH) * setting.heightPerGrade > setting.jumpableHeight)
                 return false;
             //gap like this, cant go
             // _____|
@@ -439,7 +544,7 @@ namespace MightyPillar
             // _____|  
             if (neighbourH > curH)
             {
-                float gapHeight = (curMaxH - neighbourH) * setting.hegithPerGrade;
+                float gapHeight = (curMaxH - neighbourH) * setting.heightPerGrade;
                 if (gapHeight >= setting.boundHeight)
                     return true;
             }
@@ -447,7 +552,7 @@ namespace MightyPillar
             {
                 if (neighbourMaxH > curH)
                 {
-                    float gapHeight = (neighbourMaxH - curH) * setting.hegithPerGrade;
+                    float gapHeight = (neighbourMaxH - curH) * setting.heightPerGrade;
                     if (gapHeight >= setting.boundHeight)
                         return true;
                 }
@@ -456,14 +561,14 @@ namespace MightyPillar
         }
         public void GetPathNeighbours(MPPathNode current, int maxX, int maxZ, MPNeigbours neighbours)
         {
-            uint[] curSlices = HeightSlicePool.GetSlices(current.SliceHeader);
+            ulong[] curSlices = HeightSlicePool.GetSlices(current.SliceHeader);
             if (curSlices == null)
                 return;
             //get current ceiling, where I can't go across
             ushort maxH = ushort.MaxValue;
             if (current.HIdx < curSlices.Length - 1)
             {
-                uint higherSlice = curSlices[current.HIdx + 1];
+                ulong higherSlice = curSlices[current.HIdx + 1];
                 ushort higherf = SliceAccessor.flag(higherSlice);
                 ushort higherheight = SliceAccessor.heightGrade(higherSlice);
                 if ((higherf & SliceAccessor.SliceCeiling) > 0)
@@ -490,9 +595,10 @@ namespace MightyPillar
         }
         private void GetPathNeighbour(ushort curH, ushort maxH, int u, int v, MPNeigbours neighbours)
         {
-            float[] center = new float[2] { 0, 0 };
+            float centerx = 0;
+            float centerz = 0;
             int subdivision = setting.subdivision;
-            QuadTreeLeaf leaf = GetLeaf(u, v, center, ref subdivision);
+            QuadTreeLeaf leaf = GetLeaf(u, v, ref centerx, ref centerz, ref subdivision);
             if (leaf == null || leaf.Slices == null)
                 return;
             //bigger subdivision may has the same slice structure, add only one
@@ -501,50 +607,47 @@ namespace MightyPillar
             //each height slice could be a neighbour
             if (leaf.Slices.Length == 1)
             {
-                uint floorSlice = leaf.Slices[0];
+                ulong floorSlice = leaf.Slices[0];
                 ushort height = SliceAccessor.heightGrade(floorSlice);
-                ushort flag = SliceAccessor.flag(floorSlice);
+                byte flag = SliceAccessor.flag(floorSlice);
                 if (CanMove2Neighbour(setting, curH, maxH, height, ushort.MaxValue))
                 {
-                    MPPathNode floor = MPPathNodePool.Pop(leaf.Header, u, v, 0, subdivision,
-                        setting.subdivision, center, height, flag);
-                    neighbours.Add(floor);
+                    neighbours.Add(leaf.Header, u, v, 0, subdivision, setting.subdivision, centerx, centerz, floorSlice);
                 }
             }
             else
             {
                 for (uint i = 0; i < leaf.Slices.Length - 1; ++i)
                 {
-                    uint currentSlice = leaf.Slices[i];
-                    ushort currentf = SliceAccessor.flag(currentSlice);
+                    ulong currentSlice = leaf.Slices[i];
+                    byte currentf = SliceAccessor.flag(currentSlice);
                     ushort currentheight = SliceAccessor.heightGrade(currentSlice);
-                    uint higherSlice = leaf.Slices[i + 1];
-                    ushort higherf = SliceAccessor.flag(higherSlice);
+                    ulong higherSlice = leaf.Slices[i + 1];
+                    byte higherf = SliceAccessor.flag(higherSlice);
                     ushort higherheight = SliceAccessor.heightGrade(higherSlice);
                     if (i == leaf.Slices.Length - 2 && (higherf & SliceAccessor.SliceCeiling) == 0)
                     {//pillar roof
                         if (CanMove2Neighbour(setting, curH, maxH, higherheight, ushort.MaxValue))
                         {
-                            MPPathNode roof = MPPathNodePool.Pop(leaf.Header, u, v, i + 1,
-                                subdivision, setting.subdivision, center, higherheight, higherf);
-                            neighbours.Add(roof);
+                            neighbours.Add(leaf.Header, u, v, i + 1, subdivision, setting.subdivision, 
+                                centerx, centerz, higherSlice);
                         }
+                        break;
                     }
                     if ((currentf & SliceAccessor.SliceCeiling) > 0)
                         continue;
                     ushort currentMaxH = ushort.MaxValue;
                     if ((higherf & SliceAccessor.SliceCeiling) > 0)
                     {//check standable
-                        float holeHeight = (higherheight - currentheight) * setting.hegithPerGrade;
+                        float holeHeight = (higherheight - currentheight) * setting.heightPerGrade;
                         if (holeHeight < setting.boundHeight)
                             continue;
                         currentMaxH = higherheight;
                     }
                     if (CanMove2Neighbour(setting, curH, maxH, currentheight, currentMaxH))
                     {
-                        MPPathNode step = MPPathNodePool.Pop(leaf.Header, u, v, i,
-                            subdivision, setting.subdivision, center, currentheight, currentf);
-                        neighbours.Add(step);
+                        neighbours.Add(leaf.Header, u, v, i, subdivision, setting.subdivision,
+                            centerx, centerz, currentSlice);
                     }
                 }
             }
@@ -580,7 +683,7 @@ namespace MightyPillar
                 }
             }
         }
-        private void GetLeafDisplaySlice(uint[] slices, float startx, float startz, float sizex, float sizez, int x, int z,
+        private void GetLeafDisplaySlice(ulong[] slices, float startx, float startz, float sizex, float sizez, int x, int z,
             List<DisplaySlice> lSlices)
         {
             float minx = startx + sizex * x;
@@ -589,10 +692,10 @@ namespace MightyPillar
             float maxz = startz + sizez * (z + 1);
             for (int i = 0; i < slices.Length; ++i)
             {
-                uint rawSlice = slices[i];
+                ulong rawSlice = slices[i];
                 DisplaySlice slice = new DisplaySlice();
                 slice.height = setting.heightValRange[0] +
-                    SliceAccessor.heightGrade(rawSlice) * setting.hegithPerGrade;
+                    SliceAccessor.heightGrade(rawSlice) * setting.heightPerGrade;
                 slice.flag = SliceAccessor.flag(rawSlice);
                 slice.min = new float[2] { minx, minz };
                 slice.max = new float[2] { maxx, maxz };

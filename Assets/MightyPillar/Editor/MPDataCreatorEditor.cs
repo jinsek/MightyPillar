@@ -12,15 +12,20 @@ public class MPDataCreatorEditor : Editor
         // Update the serializedProperty - always do this in the beginning of OnInspectorGUI.
         serializedObject.Update();
         base.OnInspectorGUI();
-        int subdivision = EditorGUILayout.IntField("Subdivision(Up to 6)", comp.Subdivision);
+        int subdivision = EditorGUILayout.IntField("Subdivision(Max 6)", comp.Subdivision);
         if (comp.Subdivision != subdivision)
         {
             comp.Subdivision = Mathf.Min(6, subdivision);
         }
-        float thickness = EditorGUILayout.FloatField("Y Slice Thickness", comp.SliceThickness);
-        if (comp.SliceThickness != thickness)
+        float thickness = EditorGUILayout.FloatField("Y Sample Thickness", comp.SampleThickness);
+        if (comp.SampleThickness != thickness)
         {
-            comp.SliceThickness = Mathf.Max(MightyPillar.SliceAccessor.minSliceThickness, thickness);
+            comp.SampleThickness = Mathf.Max(MightyPillar.SliceAccessor.minSliceThickness, thickness);
+        }
+        float slopeErr = EditorGUILayout.FloatField("Slope Tolerance(Max 10)", comp.SlopeError);
+        if (comp.SlopeError != slopeErr)
+        {
+            comp.SlopeError = Mathf.Clamp(slopeErr, 0, MightyPillar.SliceAccessor.maxSlopeError);
         }
         MPDataCreator dc = (MPDataCreator)target;
         if (GUILayout.Button("CreateData"))

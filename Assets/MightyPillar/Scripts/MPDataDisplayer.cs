@@ -96,14 +96,14 @@ public class MPDataDisplayer : MonoBehaviour
         Color greenRect = new Color(0, 1, 0, 0.3f);
         if (Draw == MPDataDrawMode.All || Draw == MPDataDrawMode.Floor)
         {
-            foreach(var slice in mSlices)
-                Handles.DrawSolidRectangleWithOutline(slice.verts, greenRect, Color.gray);
+            for(int i=0; i<mSlices.Count; ++i)
+                Handles.DrawSolidRectangleWithOutline(mSlices[i].verts, greenRect, Color.gray);
         }
         Handles.color = redRect;
         if (Draw == MPDataDrawMode.All || Draw == MPDataDrawMode.Blocks)
         {
-            foreach (var cube in mCubes)
-                Handles.DrawWireCube(cube.center, cube.size);
+            for (int i = 0; i < mCubes.Count; ++i)
+                Handles.DrawWireCube(mCubes[i].center, mCubes[i].size);
         }
     }
 #endif

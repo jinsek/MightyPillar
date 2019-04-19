@@ -74,7 +74,7 @@
             item.Next = null;
             return item;
         }
-        public void Enqeue(T item)
+        public void Enqueue(T item)
         {
             if (mHead == null)
             {

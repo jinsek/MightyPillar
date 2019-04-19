@@ -52,48 +52,98 @@
         public Vector3 center;
         public Vector2 size;
     }
-    public static class MPDataAccessor
+    public class MPUnityHeightScanner
     {
+        private Vector3 checkHalfExtent = Vector3.one;
+        private RaycastHit[] hitResultBuff = new RaycastHit[128];
+        private RawSlice infinitRoof = new RawSlice();
+        public MPUnityHeightScanner(Vector3 halfExtent)
+        {
+            checkHalfExtent = halfExtent;
+            infinitRoof.flag = 0;
+            infinitRoof.height = float.MaxValue;
+        }
+        public void Reset(Vector3 halfExtent)
+        {
+            checkHalfExtent = halfExtent;
+        }
+        public void RunScan(Vector3 topOrigin, float heightPerGrade, float[] hRange, OrderedSlices slices)
+        {
+            float rayLen = hRange[1] - hRange[0];
+            int len = Physics.BoxCastNonAlloc(topOrigin, checkHalfExtent, Vector3.down, hitResultBuff,
+                Quaternion.identity, 1.1f * rayLen);
+            //floor
+            for (int h = 0; h < len && h < SliceAccessor.MaxHeightSliceCount / 2; ++h)
+            {
+                RaycastHit hit = hitResultBuff[h];
+                if (Vector3.Dot(hit.normal, Vector3.up) < 0)
+                    continue;
+                RawSlice rs = new RawSlice();
+                rs.height = hit.point.y;
+                rs.flag = 0;
+                slices.Add(rs);
+                //Debug.Log(string.Format("u : {0}, v : {1}, height : {2}, flag : {3}", curXIdx, curZIdx, rs.height, rs.flag));
+            }
+            slices.SortSlices();
+            if (slices.Count == 0)
+            {
+                slices.Add(infinitRoof);
+            }
+            //ceiling
+            Vector3 down = topOrigin;
+            down.y = slices[0].height + 2f * heightPerGrade;
+            len = Physics.BoxCastNonAlloc(down, checkHalfExtent, Vector3.up, hitResultBuff, Quaternion.identity, 1.1f * rayLen);
+            for (int h = 0; h < len && h < SliceAccessor.MaxHeightSliceCount / 2; ++h)
+            {
+                RaycastHit hit = hitResultBuff[h];
+                if (Vector3.Dot(hit.normal, Vector3.down) < 0)
+                    continue;
+                RawSlice rs = new RawSlice();
+                rs.height = hit.point.y;
+                rs.flag = 1;
+                slices.Add(rs);
+                //Debug.Log(string.Format("u : {0}, v : {1}, height : {2}, flag : {3}", curXIdx, curZIdx, rs.height, rs.flag));
+            }
+            slices.Unify(hRange[0], heightPerGrade);
+        }
+    }
+    public class MPUnityAStar : MPAStarPath
+    {
+        //dynamic add obstacle
+        private MPUnityHeightScanner mHeightScanner = new MPUnityHeightScanner(Vector3.one);
+        //
+        public MPUnityAStar(PillarData data) : base(data)
+        {}
         //x ~ (0, setting.maxX * power(2, subdivision)), z ~ (0, setting.maxZ * power(2, subdivision))
-        public static void TransformPos2UV(PillarData data, Vector3 pos, ref int u, ref int v)
+        private void TransformPos2UV(Vector3 pos, ref int u, ref int v)
         {
-            int detail = 1 << data.setting.subdivision;
-            float sizex = data.setting.maxX * data.setting.sliceSize[0];
-            float sizez = data.setting.maxZ * data.setting.sliceSize[1];
-            float fx = pos.x - (data.setting.center[0] - 0.5f * sizex);
-            float fz = pos.z - (data.setting.center[2] - 0.5f * sizez);
-            fx = Mathf.Clamp(fx, 0, sizex);
-            fz = Mathf.Clamp(fz, 0, sizez);
-            u = Mathf.FloorToInt(fx / (data.setting.sliceSize[0] / detail));
-            v = Mathf.FloorToInt(fz / (data.setting.sliceSize[1] / detail));
+            float fx = pos.x - (VolumeCenterX - 0.5f * mVolumeSizeX);
+            float fz = pos.z - (VolumeCenterZ - 0.5f * mVolumeSizeZ);
+            fx = Mathf.Clamp(fx, 0, mVolumeSizeX);
+            fz = Mathf.Clamp(fz, 0, mVolumeSizeZ);
+            u = Mathf.FloorToInt(fx / mDetailGridX);
+            v = Mathf.FloorToInt(fz / mDetailGridZ);
         }
-        public static Vector3 TransformUV2Pos(PillarData data, ushort h, int u, int v)
+        private Vector3 TransformUV2Pos(ushort h, int u, int v)
         {
-            int detail = 1 << data.setting.subdivision;
-            float sizex = data.setting.maxX * data.setting.sliceSize[0];
-            float sizez = data.setting.maxZ * data.setting.sliceSize[1];
-            return new Vector3(data.setting.center[0] - 0.5f * sizex + u * data.setting.sliceSize[0] / detail,
-                h * data.setting.hegithPerGrade + data.setting.heightValRange[0],
-                data.setting.center[2] - 0.5f * sizez + v * data.setting.sliceSize[1] / detail);
+            return new Vector3(VolumeCenterX - 0.5f * mVolumeSizeX + u * mDetailGridX, h * VolumeHSliceT + VolumeFloor,
+                VolumeCenterZ - 0.5f * mVolumeSizeZ + v * mDetailGridZ);
         }
-        public static void FindPath(PillarData data, Vector3 start, Vector3 dest, Stack<MPPathResult> result,
-            Queue<MPDebugPlane> qDebug = null)
+        public void FindPath(Vector3 start, Vector3 dest, Stack<MPPathResult> result, Queue<MPDebugPlane> qDebug = null)
         {
             int srcx = 0;
             int srcz = 0;
-            ushort srcH = (ushort)(Mathf.Clamp(start.y - data.setting.heightValRange[0], 0, data.setting.heightValRange[1]) / 
-                data.setting.hegithPerGrade);
-            TransformPos2UV(data, start, ref srcx, ref srcz);
+            ushort srcH = (ushort)(Mathf.Clamp(start.y - VolumeFloor, 0, VolumeCeiling) / VolumeHSliceT);
+            TransformPos2UV(start, ref srcx, ref srcz);
             ushort fixH = srcH;
-            MPPathNode srcNode = data.GetStandablePathNode(srcx, srcz, srcH);
+            MPPathNode srcNode = mData.GetStandablePathNode(srcx, srcz, srcH);
             if (srcNode == null)
                 return;
             int destx = 0;
             int destz = 0;
-            ushort destH = (ushort)(Mathf.Clamp(dest.y - data.setting.heightValRange[0], 0, data.setting.heightValRange[1]) /
-                data.setting.hegithPerGrade);
-            TransformPos2UV(data, dest, ref destx, ref destz);
-            MPPathNode destNode = data.GetStandablePathNode(destx, destz, destH);
+            ushort destH = (ushort)(Mathf.Clamp(dest.y - VolumeFloor, 0, VolumeCeiling) / VolumeHSliceT);
+            TransformPos2UV(dest, ref destx, ref destz);
+            MPPathNode destNode = mData.GetStandablePathNode(destx, destz, destH);
             if (destNode == null)
                 return;
             //
@@ -105,19 +155,16 @@
                 return;
             }
             //
-            Vector3 volumnMin = new Vector3(data.setting.center[0] - 0.5f * data.setting.maxX * data.setting.sliceSize[0],
-                data.setting.heightValRange[0],
-                data.setting.center[2] - 0.5f * data.setting.maxZ * data.setting.sliceSize[1]);
-            Vector2 minCellSize = new Vector2(data.setting.sliceSize[0], data.setting.sliceSize[1]);
-            minCellSize *= 1f / (1 << data.setting.subdivision);
+            Vector3 volumnMin = new Vector3(VolumeCenterX - 0.5f * mVolumeSizeX, VolumeFloor, 
+                VolumeCenterZ - 0.5f * mVolumeSizeZ);
+            Vector2 minCellSize = new Vector2(mDetailGridX, mDetailGridZ);
             if (qDebug != null)
-                MPAStarPath.isDebug = true;
-            if (MPAStarPath.FindPath(data, srcNode, destNode))
+                isDebug = true;
+            if (FindPath(srcNode, destNode))
             {
-                MPPathNode prevNode = destNode;
-                while (MPAStarPath.pathResult.Count > 0)
+                while (pathResult.Count > 0)
                 {
-                    MPPathNode node = MPAStarPath.pathResult.Dequeue();
+                    MPPathNode node = pathResult.Dequeue();
                     //use request node as final node
                     if (node.UID == destNode.UID)
                         continue;
@@ -126,18 +173,8 @@
                         result.Push(MPPathResultPool.Pop(start, node.HeightGrade, node.Flag));
                         continue;
                     }
-                    if (MPAStarPath.pathResult.Count > 0 && node.Subdivision > prevNode.Subdivision && 
-                        node.HeightGrade == prevNode.HeightGrade &&
-                        node.Subdivision > MPAStarPath.pathResult.Peek().Subdivision)
-                    {
-                        prevNode = node;
-                        continue;
-                    }
-                    prevNode = node;
-                   //subdivision -- bigger subdivision -- subdivision
-                   //the pass by bigger subdivision can be remove
                    Vector3 nodeCenter = volumnMin + node.X * Vector3.right + node.Z * Vector3.forward +
-                        node.HeightGrade * data.setting.hegithPerGrade * Vector3.up;
+                        node.HeightGrade * VolumeHSliceT * Vector3.up;
                     result.Push(MPPathResultPool.Pop(nodeCenter, node.HeightGrade, node.Flag));
                 }
             }
@@ -147,57 +184,45 @@
                 result.Pop();
             }
             //debug
-            while (MPAStarPath.isDebug && MPAStarPath.debugnodes.Count > 0)
+            while (isDebug && debugnodes.Count > 0)
             {
-                MPPathNode node = MPAStarPath.debugnodes.Dequeue();
+                MPPathNode node = debugnodes.Dequeue();
                 MPDebugPlane plane = new MPDebugPlane();
                 plane.center = volumnMin + node.X * Vector3.right + node.Z * Vector3.forward +
-                    (node.HeightGrade + 2) * data.setting.hegithPerGrade * Vector3.up;
+                    (node.HeightGrade + 2) * VolumeHSliceT * Vector3.up;
                 plane.size = (1 << node.Subdivision) * minCellSize;
                 qDebug.Enqueue(plane);
             }
-            MPPathNodePool.Push(srcNode);
-            MPPathNodePool.Push(destNode);
-            MPAStarPath.EndFindPath();
+            EndFindPath();
         }
         //dynamic obstacles
-        public static void DynamicAddPillar(PillarData data, Vector3 pos, Bounds bnd)
+        public void DynamicAddPillar(Vector3 pos, Bounds bnd)
         {
             Vector3 min = pos - bnd.extents;
             Vector3 max = pos + bnd.extents;
-            int startU = 0, startV = 0, endU = data.setting.maxX, endV = data.setting.maxZ;
-            TransformPos2UV(data, min, ref startU, ref startV);
-            TransformPos2UV(data, max, ref endU, ref endV);
-            Vector3 volumnMin = new Vector3(data.setting.center[0] - 0.5f * data.setting.maxX * data.setting.sliceSize[0],
-                data.setting.heightValRange[0],
-                data.setting.center[2] - 0.5f * data.setting.maxZ * data.setting.sliceSize[1]);
-            Vector3 checkHalfExtent = new Vector3(data.setting.sliceSize[0] / 2, data.setting.hegithPerGrade,
-                data.setting.sliceSize[1] / 2);
-            RaycastHit[] hitResultBuff = new RaycastHit[128];
+            int startU = 0, startV = 0, endU = mData.setting.maxX, endV = mData.setting.maxZ;
+            TransformPos2UV(min, ref startU, ref startV);
+            TransformPos2UV(max, ref endU, ref endV);
+            Vector3 volumnMin = new Vector3(VolumeCenterX - 0.5f * mVolumeSizeX, VolumeFloor,
+                VolumeCenterZ - 0.5f * mVolumeSizeZ);
+            Vector3 checkHalfExtent = new Vector3(GridX / 2, VolumeHSliceT, GridZ / 2);
+            mHeightScanner.Reset(checkHalfExtent);
             HashSet<uint> dirtyNodes = new HashSet<uint>();
-            float rayLen = 1.1f * (data.setting.heightValRange[1] - data.setting.heightValRange[0]);
-            int detailedSize = 1 << data.setting.subdivision;
+            OrderedSlices slices = new OrderedSlices();
+            int detailedSize = 1 << mData.setting.subdivision;
             for (int u = startU; u <= endU; ++u)
             {
                 for (int v = startV; v <= endV; ++v)
                 {
-                    int curXIdx = u >> data.setting.subdivision;
-                    int curZIdx = v >> data.setting.subdivision;
-                    QuadTreeBase subtree = data.tree[curXIdx * data.setting.maxZ + curZIdx];
+                    int curXIdx = u >> mData.setting.subdivision;
+                    int curZIdx = v >> mData.setting.subdivision;
+                    QuadTreeBase subtree = mData.tree[curXIdx * mData.setting.maxZ + curZIdx];
                     QuadTreeNode node = null;
                     if (subtree is QuadTreeLeaf)
                     {
                         QuadTreeLeaf leaf = (QuadTreeLeaf)subtree;
-                        node = new QuadTreeNode(0);
-                        //subdivide this into leafs
-                        for (int i = 0; i < 4; ++i)
-                        {
-                            QuadTreeLeaf childLeaf = (QuadTreeLeaf)node.Children[i];
-                            childLeaf.Reset(leaf.Slices.Length, leaf.HashVal);
-                            Array.Copy(leaf.Slices, childLeaf.Slices, leaf.Slices.Length);
-                        }
-                        HeightSlicePool.Push(leaf.Header, leaf.Slices);
-                        data.tree[curXIdx * data.setting.maxZ + curZIdx] = node;
+                        node = QuadTreeNode.SubdivideLeaf(leaf);
+                        mData.tree[curXIdx * mData.setting.maxZ + curZIdx] = node;
                     }
                     else
                     {
@@ -207,48 +232,14 @@
                     dirtyId = (dirtyId << 16) | (uint)curZIdx;
                     if (!dirtyNodes.Contains(dirtyId))
                         dirtyNodes.Add(dirtyId);
-                    OrderedSlices slices = new OrderedSlices();
-                    float fx = (float)(u + 0.5f) / detailedSize * data.setting.sliceSize[0];
-                    float fz = (float)(v + 0.5f) / detailedSize * data.setting.sliceSize[1];
+                    float fx = (float)(u + 0.5f) * mDetailGridX;
+                    float fz = (float)(v + 0.5f) * mDetailGridZ;
                     Vector3 top = volumnMin + fx * Vector3.right + 
-                        (data.setting.heightValRange[1] + 10f * data.setting.hegithPerGrade) * Vector3.up +
+                        (VolumeCeiling + 10f * VolumeHSliceT) * Vector3.up +
                         fz * Vector3.forward;
-                    int len = Physics.BoxCastNonAlloc(top, checkHalfExtent, Vector3.down, hitResultBuff, Quaternion.identity, 1.1f * rayLen);
-                    //floor
-                    for (int h = 0; h < len && h < SliceAccessor.MaxHeightSliceCount / 2; ++h)
-                    {
-                        RaycastHit hit = hitResultBuff[h];
-                        if (Vector3.Dot(hit.normal, Vector3.up) < 0)
-                            continue;
-                        RawSlice rs = new RawSlice();
-                        rs.height = hit.point.y;
-                        rs.flag = 0;
-                        rs.heightGrade = ushort.MaxValue;
-                        slices.Add(rs);
-                        //Debug.Log(string.Format("u : {0}, v : {1}, height : {2}, flag : {3}", curXIdx, curZIdx, rs.height, rs.flag));
-                    }
-                    slices.SortSlices();
-                    if (slices.Count == 0)
-                    {
-                        slices.Add(new RawSlice());
-                    }
-                    //ceiling
-                    Vector3 down = top;
-                    down.y = slices[0].height + 2f * data.setting.hegithPerGrade;
-                    len = Physics.BoxCastNonAlloc(down, checkHalfExtent, Vector3.up, hitResultBuff, Quaternion.identity, 1.1f * rayLen);
-                    for (int h = 0; h < len && h < SliceAccessor.MaxHeightSliceCount / 2; ++h)
-                    {
-                        RaycastHit hit = hitResultBuff[h];
-                        if (Vector3.Dot(hit.normal, Vector3.down) < 0)
-                            continue;
-                        RawSlice rs = new RawSlice();
-                        rs.height = hit.point.y;
-                        rs.flag = 1;
-                        slices.Add(rs);
-                        //Debug.Log(string.Format("u : {0}, v : {1}, height : {2}, flag : {3}", curXIdx, curZIdx, rs.height, rs.flag));
-                    }
-                    slices.Unify(data.setting.heightValRange[0], data.setting.hegithPerGrade);
-                    node.AddPillar(data.setting.subdivision, u, v, slices);
+                    slices.Clear();
+                    mHeightScanner.RunScan(top, VolumeHSliceT, mData.setting.heightValRange, slices);
+                    node.AddPillar(mData.setting.subdivision, u, v, slices);
                 }
             }
             //merge
@@ -256,17 +247,13 @@
             {
                 uint x = dirtyId >> 16;
                 uint z = dirtyId & 0x0000ffff;
-                int idx = (int)(x * data.setting.maxZ + z);
-                QuadTreeNode node = (QuadTreeNode)data.tree[idx];
-                node.CombineTree();
-                if (node.IsCombinableLeaf)
+                int idx = (int)(x * mData.setting.maxZ + z);
+                QuadTreeNode node = (QuadTreeNode)mData.tree[idx];
+                QuadTreeBase replaceLeaf = QuadTreeNode.CombineTree(node, 0.5f * GridX, 0.5f * GridZ, VolumeHSliceT, 
+                    mData.setting.slopeErr);
+                if (replaceLeaf != null)
                 {
-                    data.tree[idx] = (QuadTreeLeaf)node.Children[0];
-                    for (int cid = 1; cid < 4; ++cid)
-                    {
-                        QuadTreeLeaf leaf = (QuadTreeLeaf)node.Children[cid];
-                        HeightSlicePool.Push(leaf.Header, leaf.Slices);
-                    }
+                    mData.tree[idx] = replaceLeaf;
                 }
             }
         }

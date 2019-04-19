@@ -58,6 +58,7 @@ public class MPDemo : MonoBehaviour
     public float BoundHeight = 1f;
     public float JumpableHeight = 5f;
     public UnityEngine.Object Anchor;
+    public UnityEngine.Object Target;
     public UnityEngine.Object DebugQuad;
     public UnityEngine.Object DynamicObstacle;
     public float MoveSpeed = 10f;
@@ -66,7 +67,8 @@ public class MPDemo : MonoBehaviour
     private BoxCollider mPendingObstacle;
     private RaycastHit mHitCache = new RaycastHit();
     private GameObject mAnchorGo;
-    private PillarData mPillar;
+    private GameObject mTargetGo;
+    private MPUnityAStar mPathPinder;
     private Stack<MPPathResult> mCurrentPath = new Stack<MPPathResult>();
     private debugPlanePool mdebugPlanePool = new debugPlanePool();
     private Queue<debugPlane> mactiveplances = new Queue<debugPlane>();
@@ -77,9 +79,10 @@ public class MPDemo : MonoBehaviour
         if (creator != null)
         {
             string path = string.Format("{0}/MightyPillar/Resources/{1}.bytes", Application.dataPath, creator.DataName);
-            mPillar = MPFileUtil.LoadData(path, creator.DataName);
-            mPillar.setting.boundHeight = BoundHeight;
-            mPillar.setting.jumpableHeight = JumpableHeight;
+            PillarData data = MPFileUtil.LoadData(path, creator.DataName);
+            data.setting.boundHeight = BoundHeight;
+            data.setting.jumpableHeight = JumpableHeight;
+            mPathPinder = new MPUnityAStar(data);
         }
     }
     private void OnDestroy()
@@ -168,11 +171,20 @@ public class MPDemo : MonoBehaviour
                 //add obstacles in next frame otherwise we can't physics cast it
             }
         }
-        if (Input.GetMouseButtonDown(1) && mAnchorGo != null && mPillar != null && mCurrentPath.Count == 0)
+        if (Input.GetMouseButtonDown(1) && mAnchorGo != null && mPathPinder != null && mCurrentPath.Count == 0)
         {//move to destination
             Ray checkRay = Camera.main.ScreenPointToRay(Input.mousePosition);
             if (Physics.Raycast(checkRay, out mHitCache))
             {
+                //create target mark
+                if (mTargetGo == null && Target != null)
+                    mTargetGo = Instantiate(Target) as GameObject;
+                if (mTargetGo != null)
+                {
+                    mTargetGo.SetActive(true);
+                    mTargetGo.transform.position = mHitCache.point;
+                }
+                UnityEngine.Profiling.Profiler.BeginSample("pathfind");
                 if (DebugQuad != null)
                 {
                     while (mactiveplances.Count > 0)
@@ -180,7 +192,7 @@ public class MPDemo : MonoBehaviour
                         debugPlanePool.Push(mactiveplances.Dequeue());
                     }
                     Queue<MPDebugPlane> qDebug = new Queue<MPDebugPlane>();
-                    MPDataAccessor.FindPath(mPillar, mAnchorGo.transform.position, mHitCache.point, mCurrentPath, qDebug);
+                    mPathPinder.FindPath(mAnchorGo.transform.position, mHitCache.point, mCurrentPath, qDebug);
                     while(qDebug.Count > 0)
                     {
                         debugPlane p = debugPlanePool.Pop(DebugQuad, qDebug.Dequeue());
@@ -188,7 +200,8 @@ public class MPDemo : MonoBehaviour
                     }
                 }
                 else
-                    MPDataAccessor.FindPath(mPillar, mAnchorGo.transform.position, mHitCache.point, mCurrentPath);
+                    mPathPinder.FindPath(mAnchorGo.transform.position, mHitCache.point, mCurrentPath);
+                UnityEngine.Profiling.Profiler.EndSample();
             }
         }
     }
@@ -209,6 +222,10 @@ public class MPDemo : MonoBehaviour
                     mAnchorGo.transform.position = node.Pos;
                 node = mCurrentPath.Pop();
                 MPPathResultPool.Push(node);
+                if (mCurrentPath.Count <= 0 && mTargetGo != null)
+                {
+                    mTargetGo.SetActive(false);
+                }
             }
             else
             {
@@ -221,7 +238,7 @@ public class MPDemo : MonoBehaviour
     {
         if (mPendingObstacle != null)
         {
-            MPDataAccessor.DynamicAddPillar(mPillar, mPendingObstacle.transform.position, mPendingObstacle.bounds);
+            mPathPinder.DynamicAddPillar(mPendingObstacle.transform.position, mPendingObstacle.bounds);
             mPendingObstacle = null;
         }
     }
